@@ -1,0 +1,130 @@
+<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width"/><meta charSet="utf-8"/><link rel="icon" type="image/png" href="/favicon.png"/><meta name="theme-color" content="#000000"/><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.12.0/dist/katex.min.css" integrity="sha384-AfEj0r4/OFrOo5t7NnNe46zW/tFgW6x/bCJG8FqQCEo3+Aro6EYUG4+cU+KJWu/X" crossorigin="anonymous"/><meta name="image" content="/favicon.png"/><title>在WebGL中使用射线选择模型 -Arthas.me</title><meta property="og:url" content="https://arthas.me/posts/ray-casting-selecting"/><meta property="og:type" content="article"/><meta property="og:title" content="在WebGL中使用射线选择模型"/><meta property="og:image" content="/favicon.png"/><meta name="twitter:title" content="在WebGL中使用射线选择模型"/><meta name="twitter:card" content="summary_large_image"/><meta name="twitter:image" content="/favicon.png"/><meta name="twitter:creator" content="@deadalusmask"/><meta name="next-head-count" content="15"/><link rel="preload" href="/_next/static/css/dd23f042793788fe269b.css" as="style"/><link rel="stylesheet" href="/_next/static/css/dd23f042793788fe269b.css" data-n-g=""/><noscript data-n-css=""></noscript><link rel="preload" href="/_next/static/chunks/main-67279fe62e81e3dbb4fe.js" as="script"/><link rel="preload" href="/_next/static/chunks/webpack-e067438c4cf4ef2ef178.js" as="script"/><link rel="preload" href="/_next/static/chunks/framework.2113c6061a2f456066a1.js" as="script"/><link rel="preload" href="/_next/static/chunks/commons.f771efd637e54964f7dc.js" as="script"/><link rel="preload" href="/_next/static/chunks/pages/_app-ff7d19fcc1eef3597074.js" as="script"/><link rel="preload" href="/_next/static/chunks/pages/posts/%5Bslug%5D-44fb0cf09ad137619ef8.js" as="script"/></head><body><div id="__next"><div class="page"><h3><a href="/">Arthas.me</a> / <a href="/posts">Posts</a> /</h3><h1>在WebGL中使用射线选择模型</h1><span>2018.8.22</span><div class="md-content"><p><a href="https://arthas.me/demo/ray-casting/index.html">DEMO</a></p>
+<h2>思路</h2>
+<p>首先要用到摄像机的位置、方向和鼠标在屏幕上的位置来得到射线的起点和方向，然后用得到的射线和模型的每个三角形测试来判断模型是否被选中。</p>
+<h2>构建射线</h2>
+<p>先实现简单的射线类：</p>
+<pre><code class="hljs language-js"><span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">Ray</span>(<span class="hljs-params">position, direction</span>) </span>{
+  <span class="hljs-built_in">this</span>.position = position
+  <span class="hljs-built_in">this</span>.direction = direction
+}</code></pre>
+<p>通过<code>camera.position</code>和<code>camera.front</code>可以直接得到一个以摄像机为原地，朝向摄像机正前方的射线。
+然后，根据摄像机的 fov 和鼠标的位置坐标可以计算出鼠标所指方向偏离中心的 x 轴和 y 轴角度。</p>
+<pre><code class="hljs language-js">argl.canvas.addEventListener(<span class="hljs-string">'mousemove'</span>, <span class="hljs-function"><span class="hljs-params">e</span> =></span> {
+  <span class="hljs-keyword">let</span> angleY = -((e.offsetY * camera.zoom / argl.options.height) - (camera.zoom / <span class="hljs-number">2</span>))
+  <span class="hljs-keyword">let</span> zoomX = (camera.zoom / argl.options.height) * argl.options.width
+  <span class="hljs-keyword">let</span> angleX = (e.offsetX * zoomX / argl.options.width) - (zoomX / <span class="hljs-number">2</span>)
+}</code></pre>
+<p>接下来，再将朝向摄像机正前方的向量在<code>camera.front</code>和<code>camera.right</code>两个向量所在的平面中旋转<code>angleX</code>度，再在旋转后的向量和<code>camera.up</code>两个向量所在的平面中旋转<code>angleY</code>度，就得到了鼠标所指向的方向。</p>
+<pre><code class="hljs language-js"><span class="hljs-keyword">let</span> normalFR = glm.vec3.create()
+glm.vec3.cross(normalFR, camera.front, camera.right)
+glm.vec3.normalize(normalFR, normalFR)
+
+<span class="hljs-keyword">let</span> direction = rotateVec(camera.front, normalFR, glm.glMatrix.toRadian(angleX))
+
+<span class="hljs-keyword">let</span> normalFU = glm.vec3.create()
+glm.vec3.cross(normalFU, direction, camera.up)
+glm.vec3.normalize(normalFU, normalFU)
+
+direction = rotateVec(direction, normalFU, glm.glMatrix.toRadian(angleY))
+
+<span class="hljs-comment">//平面内向量的旋转，normal为平面的法线，angle为旋转角度</span>
+<span class="hljs-function"><span class="hljs-keyword">function</span> <span class="hljs-title">rotateVec</span>(<span class="hljs-params">vec, normal, angle</span>) </span>{
+  <span class="hljs-keyword">let</span> direction = glm.vec3.create()
+  <span class="hljs-keyword">let</span> t1 = glm.vec3.create()
+  <span class="hljs-keyword">let</span> t2 = glm.vec3.create()
+
+  glm.vec3.normalize(normal, normal)
+
+  glm.vec3.scale(t1, vec, <span class="hljs-built_in">Math</span>.cos(angle))
+  glm.vec3.cross(t2, normal, vec)
+  glm.vec3.scale(t2, t2, <span class="hljs-built_in">Math</span>.sin(angle))
+  glm.vec3.add(direction, t1, t2)
+
+  <span class="hljs-keyword">return</span> direction
+}</code></pre>
+<p>然后就可以构建所需射线了：</p>
+<pre><code class="hljs language-js"><span class="hljs-keyword">let</span> ray = <span class="hljs-keyword">new</span> Ray(camera.position, direction)</code></pre>
+<h2>射线三角形相交检测算法</h2>
+<p>使用的算法为<a href="https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm">Möller–Trumbore intersection algorithm</a></p>
+<p>js 实现如下, 我将其作为 Ray 类的一个方法：</p>
+<pre><code class="hljs language-js">Ray.prototype.intersectsTriangle = <span class="hljs-function"><span class="hljs-keyword">function</span>(<span class="hljs-params">triangle</span>) </span>{
+  <span class="hljs-keyword">const</span> EPSILON = <span class="hljs-number">0.0000001</span>
+  <span class="hljs-keyword">let</span> edge1 = glm.vec3.create()
+  <span class="hljs-keyword">let</span> edge2 = glm.vec3.create()
+  <span class="hljs-keyword">let</span> h = glm.vec3.create()
+  <span class="hljs-keyword">let</span> s = glm.vec3.create()
+  <span class="hljs-keyword">let</span> q = glm.vec3.create()
+  <span class="hljs-keyword">let</span> a, f, u, v, t
+  <span class="hljs-keyword">let</span> temp = glm.vec3.create()
+
+  glm.vec3.sub(edge1, triangle[<span class="hljs-number">1</span>], triangle[<span class="hljs-number">0</span>])
+  glm.vec3.sub(edge2, triangle[<span class="hljs-number">2</span>], triangle[<span class="hljs-number">0</span>])
+  glm.vec3.cross(h, <span class="hljs-built_in">this</span>.direction, edge2)
+  a = glm.vec3.dot(edge1, h)
+  <span class="hljs-keyword">if</span> (a > -EPSILON &#x26;&#x26; a &#x3C; EPSILON) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>
+  f = <span class="hljs-number">1</span> / a
+  glm.vec3.sub(s, <span class="hljs-built_in">this</span>.position, triangle[<span class="hljs-number">0</span>])
+  u = f * glm.vec3.dot(s, h)
+  <span class="hljs-keyword">if</span> (u &#x3C; <span class="hljs-number">0.0</span> || u > <span class="hljs-number">1.0</span>) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>
+  glm.vec3.cross(q, s, edge1)
+  v = f * glm.vec3.dot(<span class="hljs-built_in">this</span>.direction, q)
+  <span class="hljs-keyword">if</span> (v &#x3C; <span class="hljs-number">0.0</span> || u + v > <span class="hljs-number">1.0</span>) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>
+  <span class="hljs-comment">// At this stage we can compute t to find out where the intersection point is on the line.</span>
+  t = f * glm.vec3.dot(edge2, q)
+  <span class="hljs-keyword">if</span> (t > EPSILON) {
+    <span class="hljs-comment">// ray intersection</span>
+    <span class="hljs-keyword">let</span> IntersectionPoint = glm.vec3.create()
+    glm.vec3.scale(temp, <span class="hljs-built_in">this</span>.direction, t)
+    glm.vec3.add(IntersectionPoint, <span class="hljs-built_in">this</span>.position, <span class="hljs-built_in">this</span>.direction)
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>
+  } <span class="hljs-comment">// This means that there is a line intersection but not a ray intersection.</span>
+  <span class="hljs-keyword">else</span> <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>
+}</code></pre>
+<h2>检测射线与模型是否相交</h2>
+<p>通过循环，使用<code>mesh.indices</code>和<code>mesh.vertices</code>中的数据来构建每一个三角形，再将其坐标变换到世界空间，然后检测他们是否与射线相交</p>
+<pre><code class="hljs language-js"><span class="hljs-keyword">let</span> flag = <span class="hljs-literal">false</span>
+<span class="hljs-keyword">let</span> len = suzanneMesh.indices.length
+
+<span class="hljs-keyword">for</span> (<span class="hljs-keyword">let</span> i = <span class="hljs-number">0</span>; i &#x3C; len; i += <span class="hljs-number">3</span>) {
+  <span class="hljs-keyword">let</span> index = [
+    suzanneMesh.indices[i],
+    suzanneMesh.indices[i + <span class="hljs-number">1</span>],
+    suzanneMesh.indices[i + <span class="hljs-number">2</span>],
+  ]
+  <span class="hljs-keyword">let</span> triangle = [glm.vec3.create(), glm.vec3.create(), glm.vec3.create()]
+  glm.vec3.transformMat4(
+    triangle[<span class="hljs-number">0</span>],
+    [
+      suzanneMesh.vertices[index[<span class="hljs-number">0</span>] * <span class="hljs-number">3</span>],
+      suzanneMesh.vertices[index[<span class="hljs-number">0</span>] * <span class="hljs-number">3</span> + <span class="hljs-number">1</span>],
+      suzanneMesh.vertices[index[<span class="hljs-number">0</span>] * <span class="hljs-number">3</span> + <span class="hljs-number">2</span>],
+    ],
+    model
+  )
+  glm.vec3.transformMat4(
+    triangle[<span class="hljs-number">1</span>],
+    [
+      suzanneMesh.vertices[index[<span class="hljs-number">1</span>] * <span class="hljs-number">3</span>],
+      suzanneMesh.vertices[index[<span class="hljs-number">1</span>] * <span class="hljs-number">3</span> + <span class="hljs-number">1</span>],
+      suzanneMesh.vertices[index[<span class="hljs-number">1</span>] * <span class="hljs-number">3</span> + <span class="hljs-number">2</span>],
+    ],
+    model
+  )
+  glm.vec3.transformMat4(
+    triangle[<span class="hljs-number">2</span>],
+    [
+      suzanneMesh.vertices[index[<span class="hljs-number">2</span>] * <span class="hljs-number">3</span>],
+      suzanneMesh.vertices[index[<span class="hljs-number">2</span>] * <span class="hljs-number">3</span> + <span class="hljs-number">1</span>],
+      suzanneMesh.vertices[index[<span class="hljs-number">2</span>] * <span class="hljs-number">3</span> + <span class="hljs-number">2</span>],
+    ],
+    model
+  )
+
+  <span class="hljs-keyword">if</span> (ray.intersectsTriangle(triangle)) {
+    flag = <span class="hljs-literal">true</span>
+  }
+}</code></pre>
+<p>然后即可利用布尔值<code>flag</code>来添加是否选中模型的效果了，demo 中选中时模型变成红色。</p>
+<h2>完整代码</h2>
+<p><a href="https://github.com/Deadalusmask/ArGL/tree/master/examples/pick_test">Deadalusmask/ArGL/examples/pick_test</a></p>
+<p><a href="https://arthas.me/demo/ray-casting/index.html">DEMO</a></p></div><hr class="hr"/><div style="display:flex;justify-content:space-between"><a style="margin-right:24px" href="/posts/Graphic-Basics-3">Graphic Basics 3 着色器</a><a href="/posts/global-state-with-hooks">Global state with hooks</a></div></div></div><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"post":{"title":"在WebGL中使用射线选择模型","date":1534877523000,"slug":"ray-casting-selecting","content":"\u003cp\u003e\u003ca href=\"https://arthas.me/demo/ray-casting/index.html\"\u003eDEMO\u003c/a\u003e\u003c/p\u003e\n\u003ch2\u003e思路\u003c/h2\u003e\n\u003cp\u003e首先要用到摄像机的位置、方向和鼠标在屏幕上的位置来得到射线的起点和方向，然后用得到的射线和模型的每个三角形测试来判断模型是否被选中。\u003c/p\u003e\n\u003ch2\u003e构建射线\u003c/h2\u003e\n\u003cp\u003e先实现简单的射线类：\u003c/p\u003e\n\u003cpre\u003e\u003ccode class=\"hljs language-js\"\u003e\u003cspan class=\"hljs-function\"\u003e\u003cspan class=\"hljs-keyword\"\u003efunction\u003c/span\u003e \u003cspan class=\"hljs-title\"\u003eRay\u003c/span\u003e(\u003cspan class=\"hljs-params\"\u003eposition, direction\u003c/span\u003e) \u003c/span\u003e{\n  \u003cspan class=\"hljs-built_in\"\u003ethis\u003c/span\u003e.position = position\n  \u003cspan class=\"hljs-built_in\"\u003ethis\u003c/span\u003e.direction = direction\n}\u003c/code\u003e\u003c/pre\u003e\n\u003cp\u003e通过\u003ccode\u003ecamera.position\u003c/code\u003e和\u003ccode\u003ecamera.front\u003c/code\u003e可以直接得到一个以摄像机为原地，朝向摄像机正前方的射线。\n然后，根据摄像机的 fov 和鼠标的位置坐标可以计算出鼠标所指方向偏离中心的 x 轴和 y 轴角度。\u003c/p\u003e\n\u003cpre\u003e\u003ccode class=\"hljs language-js\"\u003eargl.canvas.addEventListener(\u003cspan class=\"hljs-string\"\u003e'mousemove'\u003c/span\u003e, \u003cspan class=\"hljs-function\"\u003e\u003cspan class=\"hljs-params\"\u003ee\u003c/span\u003e =\u003e\u003c/span\u003e {\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e angleY = -((e.offsetY * camera.zoom / argl.options.height) - (camera.zoom / \u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e))\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e zoomX = (camera.zoom / argl.options.height) * argl.options.width\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e angleX = (e.offsetX * zoomX / argl.options.width) - (zoomX / \u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e)\n}\u003c/code\u003e\u003c/pre\u003e\n\u003cp\u003e接下来，再将朝向摄像机正前方的向量在\u003ccode\u003ecamera.front\u003c/code\u003e和\u003ccode\u003ecamera.right\u003c/code\u003e两个向量所在的平面中旋转\u003ccode\u003eangleX\u003c/code\u003e度，再在旋转后的向量和\u003ccode\u003ecamera.up\u003c/code\u003e两个向量所在的平面中旋转\u003ccode\u003eangleY\u003c/code\u003e度，就得到了鼠标所指向的方向。\u003c/p\u003e\n\u003cpre\u003e\u003ccode class=\"hljs language-js\"\u003e\u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e normalFR = glm.vec3.create()\nglm.vec3.cross(normalFR, camera.front, camera.right)\nglm.vec3.normalize(normalFR, normalFR)\n\n\u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e direction = rotateVec(camera.front, normalFR, glm.glMatrix.toRadian(angleX))\n\n\u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e normalFU = glm.vec3.create()\nglm.vec3.cross(normalFU, direction, camera.up)\nglm.vec3.normalize(normalFU, normalFU)\n\ndirection = rotateVec(direction, normalFU, glm.glMatrix.toRadian(angleY))\n\n\u003cspan class=\"hljs-comment\"\u003e//平面内向量的旋转，normal为平面的法线，angle为旋转角度\u003c/span\u003e\n\u003cspan class=\"hljs-function\"\u003e\u003cspan class=\"hljs-keyword\"\u003efunction\u003c/span\u003e \u003cspan class=\"hljs-title\"\u003erotateVec\u003c/span\u003e(\u003cspan class=\"hljs-params\"\u003evec, normal, angle\u003c/span\u003e) \u003c/span\u003e{\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e direction = glm.vec3.create()\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e t1 = glm.vec3.create()\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e t2 = glm.vec3.create()\n\n  glm.vec3.normalize(normal, normal)\n\n  glm.vec3.scale(t1, vec, \u003cspan class=\"hljs-built_in\"\u003eMath\u003c/span\u003e.cos(angle))\n  glm.vec3.cross(t2, normal, vec)\n  glm.vec3.scale(t2, t2, \u003cspan class=\"hljs-built_in\"\u003eMath\u003c/span\u003e.sin(angle))\n  glm.vec3.add(direction, t1, t2)\n\n  \u003cspan class=\"hljs-keyword\"\u003ereturn\u003c/span\u003e direction\n}\u003c/code\u003e\u003c/pre\u003e\n\u003cp\u003e然后就可以构建所需射线了：\u003c/p\u003e\n\u003cpre\u003e\u003ccode class=\"hljs language-js\"\u003e\u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e ray = \u003cspan class=\"hljs-keyword\"\u003enew\u003c/span\u003e Ray(camera.position, direction)\u003c/code\u003e\u003c/pre\u003e\n\u003ch2\u003e射线三角形相交检测算法\u003c/h2\u003e\n\u003cp\u003e使用的算法为\u003ca href=\"https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm\"\u003eMöller–Trumbore intersection algorithm\u003c/a\u003e\u003c/p\u003e\n\u003cp\u003ejs 实现如下, 我将其作为 Ray 类的一个方法：\u003c/p\u003e\n\u003cpre\u003e\u003ccode class=\"hljs language-js\"\u003eRay.prototype.intersectsTriangle = \u003cspan class=\"hljs-function\"\u003e\u003cspan class=\"hljs-keyword\"\u003efunction\u003c/span\u003e(\u003cspan class=\"hljs-params\"\u003etriangle\u003c/span\u003e) \u003c/span\u003e{\n  \u003cspan class=\"hljs-keyword\"\u003econst\u003c/span\u003e EPSILON = \u003cspan class=\"hljs-number\"\u003e0.0000001\u003c/span\u003e\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e edge1 = glm.vec3.create()\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e edge2 = glm.vec3.create()\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e h = glm.vec3.create()\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e s = glm.vec3.create()\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e q = glm.vec3.create()\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e a, f, u, v, t\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e temp = glm.vec3.create()\n\n  glm.vec3.sub(edge1, triangle[\u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e], triangle[\u003cspan class=\"hljs-number\"\u003e0\u003c/span\u003e])\n  glm.vec3.sub(edge2, triangle[\u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e], triangle[\u003cspan class=\"hljs-number\"\u003e0\u003c/span\u003e])\n  glm.vec3.cross(h, \u003cspan class=\"hljs-built_in\"\u003ethis\u003c/span\u003e.direction, edge2)\n  a = glm.vec3.dot(edge1, h)\n  \u003cspan class=\"hljs-keyword\"\u003eif\u003c/span\u003e (a \u003e -EPSILON \u0026#x26;\u0026#x26; a \u0026#x3C; EPSILON) \u003cspan class=\"hljs-keyword\"\u003ereturn\u003c/span\u003e \u003cspan class=\"hljs-literal\"\u003efalse\u003c/span\u003e\n  f = \u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e / a\n  glm.vec3.sub(s, \u003cspan class=\"hljs-built_in\"\u003ethis\u003c/span\u003e.position, triangle[\u003cspan class=\"hljs-number\"\u003e0\u003c/span\u003e])\n  u = f * glm.vec3.dot(s, h)\n  \u003cspan class=\"hljs-keyword\"\u003eif\u003c/span\u003e (u \u0026#x3C; \u003cspan class=\"hljs-number\"\u003e0.0\u003c/span\u003e || u \u003e \u003cspan class=\"hljs-number\"\u003e1.0\u003c/span\u003e) \u003cspan class=\"hljs-keyword\"\u003ereturn\u003c/span\u003e \u003cspan class=\"hljs-literal\"\u003efalse\u003c/span\u003e\n  glm.vec3.cross(q, s, edge1)\n  v = f * glm.vec3.dot(\u003cspan class=\"hljs-built_in\"\u003ethis\u003c/span\u003e.direction, q)\n  \u003cspan class=\"hljs-keyword\"\u003eif\u003c/span\u003e (v \u0026#x3C; \u003cspan class=\"hljs-number\"\u003e0.0\u003c/span\u003e || u + v \u003e \u003cspan class=\"hljs-number\"\u003e1.0\u003c/span\u003e) \u003cspan class=\"hljs-keyword\"\u003ereturn\u003c/span\u003e \u003cspan class=\"hljs-literal\"\u003efalse\u003c/span\u003e\n  \u003cspan class=\"hljs-comment\"\u003e// At this stage we can compute t to find out where the intersection point is on the line.\u003c/span\u003e\n  t = f * glm.vec3.dot(edge2, q)\n  \u003cspan class=\"hljs-keyword\"\u003eif\u003c/span\u003e (t \u003e EPSILON) {\n    \u003cspan class=\"hljs-comment\"\u003e// ray intersection\u003c/span\u003e\n    \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e IntersectionPoint = glm.vec3.create()\n    glm.vec3.scale(temp, \u003cspan class=\"hljs-built_in\"\u003ethis\u003c/span\u003e.direction, t)\n    glm.vec3.add(IntersectionPoint, \u003cspan class=\"hljs-built_in\"\u003ethis\u003c/span\u003e.position, \u003cspan class=\"hljs-built_in\"\u003ethis\u003c/span\u003e.direction)\n    \u003cspan class=\"hljs-keyword\"\u003ereturn\u003c/span\u003e \u003cspan class=\"hljs-literal\"\u003etrue\u003c/span\u003e\n  } \u003cspan class=\"hljs-comment\"\u003e// This means that there is a line intersection but not a ray intersection.\u003c/span\u003e\n  \u003cspan class=\"hljs-keyword\"\u003eelse\u003c/span\u003e \u003cspan class=\"hljs-keyword\"\u003ereturn\u003c/span\u003e \u003cspan class=\"hljs-literal\"\u003efalse\u003c/span\u003e\n}\u003c/code\u003e\u003c/pre\u003e\n\u003ch2\u003e检测射线与模型是否相交\u003c/h2\u003e\n\u003cp\u003e通过循环，使用\u003ccode\u003emesh.indices\u003c/code\u003e和\u003ccode\u003emesh.vertices\u003c/code\u003e中的数据来构建每一个三角形，再将其坐标变换到世界空间，然后检测他们是否与射线相交\u003c/p\u003e\n\u003cpre\u003e\u003ccode class=\"hljs language-js\"\u003e\u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e flag = \u003cspan class=\"hljs-literal\"\u003efalse\u003c/span\u003e\n\u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e len = suzanneMesh.indices.length\n\n\u003cspan class=\"hljs-keyword\"\u003efor\u003c/span\u003e (\u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e i = \u003cspan class=\"hljs-number\"\u003e0\u003c/span\u003e; i \u0026#x3C; len; i += \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e) {\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e index = [\n    suzanneMesh.indices[i],\n    suzanneMesh.indices[i + \u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e],\n    suzanneMesh.indices[i + \u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e],\n  ]\n  \u003cspan class=\"hljs-keyword\"\u003elet\u003c/span\u003e triangle = [glm.vec3.create(), glm.vec3.create(), glm.vec3.create()]\n  glm.vec3.transformMat4(\n    triangle[\u003cspan class=\"hljs-number\"\u003e0\u003c/span\u003e],\n    [\n      suzanneMesh.vertices[index[\u003cspan class=\"hljs-number\"\u003e0\u003c/span\u003e] * \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e],\n      suzanneMesh.vertices[index[\u003cspan class=\"hljs-number\"\u003e0\u003c/span\u003e] * \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e + \u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e],\n      suzanneMesh.vertices[index[\u003cspan class=\"hljs-number\"\u003e0\u003c/span\u003e] * \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e + \u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e],\n    ],\n    model\n  )\n  glm.vec3.transformMat4(\n    triangle[\u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e],\n    [\n      suzanneMesh.vertices[index[\u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e] * \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e],\n      suzanneMesh.vertices[index[\u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e] * \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e + \u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e],\n      suzanneMesh.vertices[index[\u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e] * \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e + \u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e],\n    ],\n    model\n  )\n  glm.vec3.transformMat4(\n    triangle[\u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e],\n    [\n      suzanneMesh.vertices[index[\u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e] * \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e],\n      suzanneMesh.vertices[index[\u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e] * \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e + \u003cspan class=\"hljs-number\"\u003e1\u003c/span\u003e],\n      suzanneMesh.vertices[index[\u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e] * \u003cspan class=\"hljs-number\"\u003e3\u003c/span\u003e + \u003cspan class=\"hljs-number\"\u003e2\u003c/span\u003e],\n    ],\n    model\n  )\n\n  \u003cspan class=\"hljs-keyword\"\u003eif\u003c/span\u003e (ray.intersectsTriangle(triangle)) {\n    flag = \u003cspan class=\"hljs-literal\"\u003etrue\u003c/span\u003e\n  }\n}\u003c/code\u003e\u003c/pre\u003e\n\u003cp\u003e然后即可利用布尔值\u003ccode\u003eflag\u003c/code\u003e来添加是否选中模型的效果了，demo 中选中时模型变成红色。\u003c/p\u003e\n\u003ch2\u003e完整代码\u003c/h2\u003e\n\u003cp\u003e\u003ca href=\"https://github.com/Deadalusmask/ArGL/tree/master/examples/pick_test\"\u003eDeadalusmask/ArGL/examples/pick_test\u003c/a\u003e\u003c/p\u003e\n\u003cp\u003e\u003ca href=\"https://arthas.me/demo/ray-casting/index.html\"\u003eDEMO\u003c/a\u003e\u003c/p\u003e"},"prev":{"slug":"Graphic-Basics-3","title":"Graphic Basics 3 着色器","date":1525119270000},"next":{"slug":"global-state-with-hooks","title":"Global state with hooks","date":1562871240000}},"__N_SSG":true},"page":"/posts/[slug]","query":{"slug":"ray-casting-selecting"},"buildId":"s2lQGLd0xJvTQahu6yiKS","nextExport":false,"isFallback":false,"gsp":true}</script><script nomodule="" src="/_next/static/chunks/polyfills-a98cee78eb8282e29fb6.js"></script><script src="/_next/static/chunks/main-67279fe62e81e3dbb4fe.js" async=""></script><script src="/_next/static/chunks/webpack-e067438c4cf4ef2ef178.js" async=""></script><script src="/_next/static/chunks/framework.2113c6061a2f456066a1.js" async=""></script><script src="/_next/static/chunks/commons.f771efd637e54964f7dc.js" async=""></script><script src="/_next/static/chunks/pages/_app-ff7d19fcc1eef3597074.js" async=""></script><script src="/_next/static/chunks/pages/posts/%5Bslug%5D-44fb0cf09ad137619ef8.js" async=""></script><script src="/_next/static/s2lQGLd0xJvTQahu6yiKS/_buildManifest.js" async=""></script><script src="/_next/static/s2lQGLd0xJvTQahu6yiKS/_ssgManifest.js" async=""></script></body></html>
